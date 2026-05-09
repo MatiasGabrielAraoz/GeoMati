@@ -1,7 +1,7 @@
 Compiler = clang
 CFLAGS = -fsanitize=address -Wall -Wextra -g
 LIBS = -lSDL3 -lm
-TARGET = main
+TARGET = GeoMati
 SRC = main.c
 EXTRA = libs/tinyexpr.c
 
