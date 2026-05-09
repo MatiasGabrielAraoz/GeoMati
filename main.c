@@ -1,3 +1,4 @@
+#include <SDL3/SDL_keycode.h>
 #define SDL_MAIN_USE_CALLBACKS 1
 
 #include "libs/tinyexpr.h"
@@ -26,6 +27,16 @@
 SDL_Window *window = NULL;
 SDL_Renderer *renderer = NULL;
 
+typedef struct{
+	float x;
+	float y;
+
+}Vector2;
+
+bool CompareVectors(Vector2 v1, Vector2 v2){
+	return v1.x == v2.x && v1.y == v2.y;
+}
+
 
 typedef struct{
 	char* formula;
@@ -44,7 +55,10 @@ typedef struct{
 }DynamicArray;
 
 typedef struct{
-	int scale;
+	float scale;
+	float lastScale;
+	Vector2 offset;
+	Vector2 lastOffset;
 	int windowWidth;
 	int windowHeight;
 	int lastWindowWidth;
@@ -76,11 +90,12 @@ void* getArray(DynamicArray *arr, int index){
 	return (char*)arr->data + (index * arr->elementSize);
 }
 
-SDL_FPoint* GetPoints(char* formula, int windowWidth, int windowHeight, int scale){
+SDL_FPoint* GetPoints(char* formula, int windowWidth, int windowHeight, float scale, Vector2 offset){
 	SDL_FPoint* points = (SDL_FPoint*)SDL_malloc(sizeof(SDL_FPoint) * (windowWidth));
 	int error;
 	double x_val;
-	te_variable vars[] = {{"x", &x_val}};
+	double y_val;
+	te_variable vars[] = {{"x", &x_val}, {"y", &y_val}};
 	te_expr *expr = te_compile(formula, vars, 1, &error);
 
 	float centerX = (float)windowWidth / 2.0f;
@@ -89,13 +104,13 @@ SDL_FPoint* GetPoints(char* formula, int windowWidth, int windowHeight, int scal
 	for (int i = 0; i < windowWidth; i++){
 		SDL_FPoint point;
 		float screenX = (float)i;
-		float mathX = (screenX - centerX) / scale;
+		float mathX = ((screenX - centerX) / scale) + offset.x;
 		point.x = screenX ;
 
 		if (expr){
 			x_val = (double)mathX;
 			float mathY = (float)te_eval(expr);
-			point.y = centerY - (mathY * scale);
+			point.y = centerY - ((mathY - offset.y)* scale);
 		}
 		else {
 			point.y = centerY;
@@ -115,7 +130,7 @@ void CreateFunction(AppData* data, Function* function, Uint8 r, Uint8 g, Uint8 b
 	int windowWidth, windowHeight;
 	SDL_GetWindowSize(window, &windowWidth, &windowHeight);
 
-	function->points = GetPoints(function->formula, windowWidth, windowHeight, data->scale);
+	function->points = GetPoints(function->formula, windowWidth, windowHeight, data->scale, data->offset);
 
 	function->colorR = r;
 	function->colorG = g;
@@ -155,6 +170,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char* argv[]){
 
 	data->lastWindowWidth = 0;
 	data->lastWindowHeight = 0;
+	data->lastScale = 0;
 	data->scale = 50;
 
 	*appstate = data;
@@ -170,6 +186,44 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event){
 	if (event->type == SDL_EVENT_WINDOW_RESIZED){
 		SDL_GetWindowSize(window, &data->windowWidth, &data->windowHeight);
 		appstate = data;
+
+	}
+	if (event->type == SDL_EVENT_MOUSE_WHEEL){
+		data->lastScale = data->scale;
+		if (event->wheel.y > 0){
+			data->scale *= 1.1f;
+		}
+		if (event->wheel.y < 0){
+			if (data->scale > 1){
+				data->scale /= 1.1f;
+			}
+		}
+	}
+	if (event->type == SDL_EVENT_KEY_DOWN){
+		float moveAmount = 20.0f / data->scale;
+		switch (event->key.key){
+			case SDLK_W:
+			case SDLK_UP:
+				data->offset.y += moveAmount;
+				break;
+
+			case SDLK_S:
+			case SDLK_DOWN:
+				data->offset.y -= moveAmount;
+				break;
+
+			case SDLK_A:
+			case SDLK_LEFT:
+				data->offset.x -= moveAmount;
+				break;
+
+			case SDLK_D:
+			case SDLK_RIGHT:
+				data->offset.x += moveAmount;
+				break;
+
+	
+		}
 	}
 
 	return SDL_APP_CONTINUE;
@@ -186,18 +240,23 @@ SDL_AppResult SDL_AppIterate(void *appstate){
 	SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
 	SDL_RenderLine(renderer, 0, (float)data->windowHeight/2, data->windowWidth, (float)data->windowHeight/2); // Eje X
 	SDL_RenderLine(renderer, (float)data->windowWidth/2, 0, (float)data->windowWidth/2, data->windowHeight); // Eje Y
+																											 
+	bool needsToUpdate = data->lastWindowWidth != data->windowWidth ||
+		data->lastWindowHeight != data->windowHeight ||
+		data->scale != data->lastScale ||
+		CompareVectors(data->offset, data->lastOffset);
 	
 	for (int i = 0; i < data->formulas.size; i++){
 		Function* function = (Function*)getArray(&data->formulas, i);
 		if (function == NULL) continue;
 		
-		if (data->lastWindowWidth != data->windowWidth || data->lastWindowHeight != data->windowHeight){
+		if (needsToUpdate){
 			SDL_free(function->points);
 
-			function->points = GetPoints(function->formula, data->windowWidth, data->windowHeight, data->scale);
-			SDL_SetRenderDrawColor(renderer, function->colorR, function->colorG, function->colorB, SDL_ALPHA_OPAQUE_FLOAT);
+			function->points = GetPoints(function->formula, data->windowWidth, data->windowHeight, data->scale, data->offset);
 		}
 
+		SDL_SetRenderDrawColor(renderer, function->colorR, function->colorG, function->colorB, SDL_ALPHA_OPAQUE_FLOAT);
 		SDL_RenderLines(renderer, function->points, data->windowWidth);
 	}
 
@@ -205,6 +264,8 @@ SDL_AppResult SDL_AppIterate(void *appstate){
 	// Mostrar en pantalla
 	SDL_RenderPresent(renderer);
 
+	data->lastOffset = data->offset;
+	data->lastScale = data->scale;
 	data->lastWindowWidth = data->windowWidth;
 	data->lastWindowHeight = data->windowHeight;
 
